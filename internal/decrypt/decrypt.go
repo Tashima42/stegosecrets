@@ -1,13 +1,22 @@
 package decrypt
 
 import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/enrichman/stegosecrets/internal/log"
 	"github.com/enrichman/stegosecrets/pkg/file"
+	"github.com/enrichman/stegosecrets/pkg/image"
 	sss "github.com/enrichman/stegosecrets/pkg/stego"
+	"github.com/pkg/errors"
 )
 
 type Decrypter struct {
+	Logger log.Logger
+
 	MasterKey []byte
 	Parts     []sss.Part
 }
@@ -22,7 +31,7 @@ func NewDecrypter(opts ...OptFunc) (*Decrypter, error) {
 	for _, opt := range opts {
 		err := opt(decrypter)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed applying options to decrypter")
 		}
 	}
 
@@ -33,10 +42,11 @@ func WithMasterKeyFile(filename string) OptFunc {
 	return func(d *Decrypter) error {
 		masterKey, err := file.ReadKey(filename)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed reading master key file")
 		}
 
 		d.MasterKey = masterKey
+
 		return nil
 	}
 }
@@ -46,9 +56,10 @@ func WithPartialKeyFiles(filenames []string) OptFunc {
 		for _, filename := range filenames {
 			err := WithPartialKeyFile(filename)(d)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "failed reading partial key file")
 			}
 		}
+
 		return nil
 	}
 }
@@ -57,46 +68,92 @@ func WithPartialKeyFile(filename string) OptFunc {
 	return func(d *Decrypter) error {
 		partialKey, err := file.ReadKey(filename)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed reading partial key file")
 		}
 
-		d.Parts = append(d.Parts, sss.NewPart(partialKey))
+		part, err := sss.NewPartFromContent(partialKey)
+		if err != nil {
+			return errors.Wrap(err, "failed creating part")
+		}
+
+		d.Parts = append(d.Parts, part)
+
 		return nil
 	}
 }
 
-// TODO fix
 func WithPartialKeyImageFile(filename string) OptFunc {
 	return func(d *Decrypter) error {
-		partialKey, err := file.ReadKey(filename)
+		file, err := os.Open(filename)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "failed opening file '%s'", filename)
+		}
+		defer file.Close()
+
+		partialKey, err := image.DecodeSecret(file)
+		if err != nil {
+			return errors.Wrap(err, "failed reading partial key image file")
 		}
 
-		d.Parts = append(d.Parts, sss.NewPart(partialKey))
+		part, err := sss.NewPartFromContent(partialKey)
+		if err != nil {
+			return errors.Wrap(err, "failed creating part")
+		}
+
+		d.Parts = append(d.Parts, part)
+
 		return nil
 	}
 }
 
-func (d *Decrypter) Decrypt(content []byte, filename string) error {
+func (d *Decrypter) Decrypt(filename string) error {
+	d.Logger.Print(fmt.Sprintf("Decrypting '%s'", filepath.Base(filename)))
+
+	if len(d.MasterKey) == 0 && len(d.Parts) < 2 {
+		return errors.New("at least a master-key or more than one part needs to be specified")
+	}
+
+	encryptedFile, err := os.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.Wrap(err, "file not found")
+		}
+
+		return errors.Wrapf(err, "failed opening file '%s'", filename)
+	}
 
 	var key []byte
-	var err error
 
 	if len(d.MasterKey) > 0 {
+		d.Logger.Print("Decrypting with master-key")
 		key = d.MasterKey
 	} else {
+		d.Logger.Print("Decrypting with partial keys")
 		key, err = sss.Combine(d.Parts)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed combining parts")
 		}
+	}
+
+	content, err := io.ReadAll(encryptedFile)
+	if err != nil {
+		return errors.Wrap(err, "failed to read content")
 	}
 
 	cleartext, err := sss.Decrypt(key, content)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed decrypting content")
 	}
 
 	// TODO check checksum
-	return file.WriteFile(cleartext, strings.TrimSuffix(filename, ".enc"))
+	outputFile := strings.TrimSuffix(filename, ".enc")
+
+	err = file.WriteFile(d.Logger, cleartext, outputFile)
+	if err != nil {
+		return errors.Wrap(err, "failed writing decoded file")
+	}
+
+	d.Logger.Print("Decrypted file saved to:", outputFile)
+
+	return nil
 }

@@ -9,12 +9,11 @@ import (
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Version",
-		Long:  `Display application version`,
+		Short: "Display the application version",
 		Run:   runVersionCmd,
 	}
 }
 
 func runVersionCmd(_ *cobra.Command, _ []string) {
-	fmt.Printf("%s version %s", AppName, Version)
+	fmt.Printf("%s version %s\n", AppName, Version)
 }

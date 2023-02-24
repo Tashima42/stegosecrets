@@ -1,0 +1,41 @@
+run:
+  go: "1.19"
+
+issues:
+  exclude-rules:
+    - path: _test.go
+      linters:
+        - funlen
+
+linters:
+  enable-all: true
+
+  disable:
+    # deprecated
+    - maligned
+    - scopelint
+    - varcheck
+    - interfacer
+    - structcheck
+    - nosnakecase
+    - deadcode
+    - exhaustivestruct
+    - ifshort
+    - golint
+
+    # warn for generics: https://github.com/golangci/golangci-lint/issues/2649
+    - rowserrcheck
+    - sqlclosecheck
+    - wastedassign
+
+    # others
+    - forbidigo
+
+    # to evaluate
+    - varnamelen
+    - noctx
+    - gomnd
+    - gochecknoglobals
+    - exhaustruct
+    - godox
+    - paralleltest

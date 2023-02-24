@@ -4,25 +4,46 @@ import (
 	"encoding/base64"
 
 	shamir "github.com/corvus-ch/shamir"
+	"github.com/pkg/errors"
 )
 
 type Part struct {
-	Version byte
-	Tag     byte
-	Content []byte
+	Version   byte
+	Parts     byte
+	Threshold byte
+	Tag       byte
+	Content   []byte
 }
 
-func NewPart(content []byte) Part {
+func NewPartFromContent(content []byte) (Part, error) {
+	if len(content) < 5 {
+		return Part{}, errors.New("invalid part: ot enough content bytes")
+	}
+
+	return NewPart(
+		content[0],
+		content[1],
+		content[2],
+		content[3],
+		content[4:],
+	), nil
+}
+
+func NewPart(version, parts, threshold, tag byte, content []byte) Part {
 	return Part{
-		Version: content[0],
-		Tag:     content[1],
-		Content: content[2:],
+		Version:   version,
+		Parts:     parts,
+		Threshold: threshold,
+		Tag:       tag,
+		Content:   content,
 	}
 }
 
 func (p Part) Bytes() []byte {
 	return append([]byte{
 		p.Version,
+		p.Parts,
+		p.Threshold,
 		p.Tag,
 	}, p.Content...)
 }
@@ -31,18 +52,21 @@ func (p Part) Base64() string {
 	return base64.StdEncoding.EncodeToString(p.Bytes())
 }
 
-func Split(secret []byte, parts, threshold int) ([]Part, error) {
-	partsMap, err := shamir.Split(secret, parts, threshold)
+func Split(secret []byte, parts, threshold uint8) ([]Part, error) {
+	partsMap, err := shamir.Split(secret, int(parts), int(threshold))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed splitting secret")
 	}
 
 	keys := []Part{}
 	for k, v := range partsMap {
-		keys = append(keys, Part{
-			Tag:     k,
-			Content: v,
-		})
+		keys = append(keys, NewPart(
+			'1',
+			parts,
+			threshold,
+			k,
+			v,
+		))
 	}
 
 	return keys, nil
@@ -54,9 +78,16 @@ func Combine(parts []Part) ([]byte, error) {
 		combinedMap[p.Tag] = p.Content
 	}
 
+	if len(combinedMap) < int(parts[0].Threshold) {
+		return nil, errors.Errorf(
+			"not enough parts provided: parts %d, threshold %d",
+			len(combinedMap), parts[0].Threshold,
+		)
+	}
+
 	res, err := shamir.Combine(combinedMap)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed combining secret")
 	}
 
 	return res, nil
